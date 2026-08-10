@@ -1,0 +1,83 @@
+processing_policy:
+  weekly_full_limit: 5       # 每周最多完整转写几期
+  weekly_preview_limit: 15   # 每周最多预览几期
+  max_episode_minutes: 180    # 超过这个时长谨慎处理
+
+preview_policy:
+  strategy: multi_segment
+  segments:
+    - [0, 120]      # 0-2分钟
+    - [300, 480]    # 5-8分钟
+    - [900, 1080]   # 15-18分钟
+  model: turbo
+
+full_transcribe_policy:
+  model: turbo
+  output_format: srt
+  language: auto
+
+score_policy:
+  full_threshold: 75      # 综合分 ≥ 75 → full（仅 score_based 模式）
+  preview_threshold: 45   # 综合分 ≥ 45 → preview（仅 score_based 模式）
+  skip_threshold: 25       # 综合分 < 25 → skip（仅 score_based 模式）
+
+# v2.4 新增：筛选策略模式
+selection_policy:
+  mode: all_preview       # all_preview | score_based
+  min_duration_minutes: 5
+  short_episode_max_minutes: 15
+  # all_preview: 所有有效新节目默认 preview，评分仅作排序/参考
+  # score_based:   保留原评分决策逻辑，便于未来切回自动筛选
+
+full_suggestion_policy:
+  # full_suggestion 仅作建议，不改变 decision
+  # all_preview 模式下 decision 恒为 preview，此建议仅供参考
+  yes_thresholds:
+    final_score: 75
+    transcription_value: 75
+  maybe_thresholds:
+    final_score: 55
+    transcription_value: 55
+
+language_policy:
+  zh:
+    summary_language: zh
+  en:
+    summary_language: zh
+    need_translation: true
+
+show_notes_translation:
+  enabled: false
+  mode: mock
+  target_language: zh
+  cache_enabled: true
+  cache_dir: cache/show_notes_translations
+  model: mock-show-notes-translator-v1
+  agent_id: ""
+  max_chunk_chars: 1800
+  timeout_seconds: 120
+
+ad_detection_policy:
+  enabled: true
+  keywords_en:
+    - "sponsored by"
+    - "support for this podcast"
+    - "this episode is brought to you by"
+    - "advertisement"
+  keywords_zh:
+    - "本期节目由"
+    - "感谢赞助"
+    - "广告"
+    - "赞助商"
+
+feishu_policy:
+  write_summary_doc: true
+  write_bitable_record: true
+  upload_srt: true
+
+whisper:
+  whisper_backend: mlx
+  whisper_model: large-v3-turbo
+  whisper_fallback_backend: openai
+  whisper_fallback_model: large-v3-turbo
+  whisper_language_mode: explicit

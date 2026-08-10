@@ -1,0 +1,311 @@
+default_network_mode: auto
+podcasts:
+- feed_type: rss
+  id: MJ
+  language: zh
+  name: 面基
+  network_mode: direct
+  notes: 小宇宙真实 RSS，含 enclosure 直链（feed.xyzfm.space）
+  priority: core
+  rss_url: https://feed.xyzfm.space/6hpdgggtxpxb
+  source_class: domestic
+  topics:
+  - invest
+  - company
+  - strategy
+- feed_type: rss
+  id: ZXJ
+  language: zh
+  name: 张小珺商业访谈录
+  network_mode: direct
+  notes: 张小珺真实 RSS，含 enclosure
+  priority: core
+  rss_url: https://feed.xyzfm.space/dk4yh3pkpjp3
+  source_class: domestic
+  topics:
+  - AI
+  - Company
+  - tech
+- feed_type: rss
+  id: WRZX
+  language: zh
+  name: 无人知晓
+  network_mode: auto
+  notes: 无人知晓真实 RSS，含 enclosure
+  priority: core
+  rss_url: https://feed.xyzfm.space/ypn9dydpbxpc
+  source_class: mixed
+  topics:
+  - invest
+  - company
+  - tech
+- feed_type: rss
+  id: TLZS
+  language: zh
+  name: 屠龙之术
+  network_mode: auto
+  notes: 屠龙之术真实 RSS，含 enclosure
+  priority: watchlist
+  rss_url: https://feed.xyzfm.space/834hyx3v9k74
+  source_class: mixed
+  topics:
+  - AI
+  - LLM
+- feed_type: rss
+  id: A16Z
+  language: en
+  name: a16Z
+  network_mode: proxy
+  notes: Simplecast RSS，含 enclosure，必须代理
+  priority: core
+  rss_url: https://feeds.simplecast.com/JGE3yC0V
+  source_class: international
+  topics:
+  - AI
+  - tech
+  - invest
+- feed_type: rss
+  id: CWT
+  language: en
+  name: Chat With Traders
+  network_mode: proxy
+  notes: Megaphone RSS，含 enclosure，必须代理
+  priority: core
+  rss_url: https://feeds.megaphone.fm/CWT9205947236
+  source_class: international
+  topics:
+  - trade
+  - invest
+  - macro
+- feed_type: rss
+  id: MS
+  language: en
+  name: Making Sense
+  network_mode: proxy
+  notes: Libsyn RSS，必须代理
+  priority: random
+  rss_url: https://rss.libsyn.com/shows/94577/destinations/480596.xml
+  source_class: international
+  topics:
+  - Science
+- feed_type: rss
+  id: FYI
+  language: en
+  name: FYI - For Your Innovation
+  network_mode: proxy
+  notes: Blubrry RSS，必须代理
+  priority: random
+  rss_url: https://feeds.blubrry.com/feeds/fyi_podcast.xml
+  source_class: international
+  topics:
+  - Tech
+- feed_type: rss
+  id: LFP
+  language: en
+  name: Lex Fridman Podcast
+  network_mode: proxy
+  notes: Lex 官方 RSS，必须代理
+  priority: random
+  rss_url: https://lexfridman.com/feed/podcast/
+  source_class: international
+  topics:
+  - Tech
+- backup_url: https://open.spotify.com/show/1tgqafxZAB0Bjd8nkwVtE4
+  feed_type: rss
+  id: YCS
+  language: en
+  name: Y Combinator Startup
+  network_mode: proxy
+  notes: Anchor.fm RSS（由 SoundCloud 迁移，2026年最新节目正常更新）
+  priority: random
+  rss_url: https://anchor.fm/s/8c1524bc/podcast/rss
+  source_class: international
+  topics:
+  - Tech Startup
+  - AI
+- backup_url: https://art19.com/shows/the-energy-gang
+  feed_type: rss
+  id: EnergyGang
+  language: en
+  name: Energy Gang
+  network_mode: proxy
+  notes: ART19 RSS，能源、气候、电力转型海外监控源
+  priority: core
+  rss_url: https://rss.art19.com/the-energy-gang
+  source_class: international
+  topics:
+  - energy
+  - power
+  - climate
+  - renewables
+- backup_url: https://www.latitudemedia.com/podcasts/catalyst/
+  feed_type: rss
+  id: Catalyst
+  language: en
+  name: Catalyst with Shayle Kann
+  network_mode: proxy
+  notes: Megaphone RSS，气候科技、电力与能源转型监控源
+  priority: core
+  rss_url: https://feeds.megaphone.fm/catalyst
+  source_class: international
+  topics:
+  - energy
+  - climate
+  - power
+  - tech
+- backup_url: https://www.volts.wtf/podcast
+  feed_type: rss
+  id: Volts
+  language: en
+  name: Volts
+  network_mode: proxy
+  notes: Substack podcast RSS，电力、气候政策与能源转型监控源
+  priority: core
+  rss_url: https://api.substack.com/feed/podcast/193024.rss
+  source_class: international
+  topics:
+  - energy
+  - power
+  - climate
+  - policy
+- backup_url: https://www.redefining-energy.com/
+  feed_type: rss
+  id: RedefiningEnergy
+  language: en
+  name: Redefining Energy
+  network_mode: proxy
+  notes: Spreaker RSS，能源转型、气候与投资监控源
+  priority: core
+  rss_url: https://www.spreaker.com/show/3170008/episodes/feed
+  source_class: international
+  topics:
+  - energy
+  - power
+  - climate
+  - invest
+- backup_url: https://joincolossus.com/
+  feed_type: rss
+  id: InvestLikeTheBest
+  language: en
+  name: Invest Like the Best
+  network_mode: proxy
+  notes: Megaphone RSS，投资、商业和公司战略海外监控源
+  priority: core
+  rss_url: https://feeds.megaphone.fm/CLS2859450455
+  source_class: international
+  topics:
+  - invest
+  - company
+  - strategy
+- backup_url: https://omny.fm/shows/odd-lots/playlists/podcast
+  feed_type: rss
+  id: OddLots
+  language: en
+  name: Odd Lots
+  network_mode: proxy
+  notes: Omny RSS，宏观、市场与投资海外监控源
+  priority: core
+  rss_url: https://www.omnycontent.com/d/playlist/e73c998e-6e60-432f-8610-ae210140c5b1/8a94442e-5a74-4fa2-8b8d-ae27003a8d6b/982f5071-765c-403d-969d-ae27003a8d83/podcast.rss
+  source_class: international
+  topics:
+  - macro
+  - invest
+  - market
+- backup_url: https://www.bloomberg.com/podcasts/masters_in_business
+  feed_type: rss
+  id: MastersInBusiness
+  language: en
+  name: Masters in Business
+  network_mode: proxy
+  notes: Omny RSS，投资、市场与商业访谈海外监控源
+  priority: core
+  rss_url: https://www.omnycontent.com/d/playlist/e73c998e-6e60-432f-8610-ae210140c5b1/4e4cd910-40a1-4619-a5f3-ae2b0012ffff/5873a3cb-298f-40bc-b71f-ae2b0013000d/podcast.rss
+  source_class: international
+  topics:
+  - invest
+  - market
+  - company
+- backup_url: https://www.capitalallocators.com/podcast/
+  feed_type: rss
+  id: CapitalAllocators
+  language: en
+  name: Capital Allocators
+  network_mode: proxy
+  notes: Libsyn RSS，资产配置、机构投资与资本市场监控源
+  priority: core
+  rss_url: https://tedseides.libsyn.com/rss
+  source_class: international
+  topics:
+  - invest
+  - asset_allocation
+  - institution
+- backup_url: https://www.acquired.fm/
+  feed_type: rss
+  id: Acquired
+  language: en
+  name: Acquired
+  network_mode: proxy
+  notes: Transistor RSS，公司史、战略、科技与投资监控源
+  priority: core
+  rss_url: https://feeds.transistor.fm/acquired
+  source_class: international
+  topics:
+  - company
+  - strategy
+  - tech
+  - invest
+- backup_url: https://feeds.simplecast.com/l2i9YnTd
+  feed_type: rss
+  id: HardFork
+  language: en
+  name: Hard Fork
+  network_mode: proxy
+  notes: Simplecast RSS，科技、AI 与公司动态海外监控源；backup_url 为备用 RSS
+  priority: core
+  rss_url: https://feeds.simplecast.com/6HKOhNgS
+  source_class: international
+  topics:
+  - tech
+  - AI
+  - company
+- backup_url: https://www.theverge.com/decoder-podcast-with-nilay-patel
+  feed_type: rss
+  id: Decoder
+  language: en
+  name: Decoder with Nilay Patel
+  network_mode: proxy
+  notes: Megaphone RSS，科技公司、平台与战略访谈监控源
+  priority: core
+  rss_url: https://feeds.megaphone.fm/recodedecode
+  source_class: international
+  topics:
+  - tech
+  - company
+  - strategy
+- backup_url: https://apple.dwarkesh-podcast.workers.dev/feed.rss
+  feed_type: rss
+  id: Dwarkesh
+  language: en
+  name: Dwarkesh Podcast
+  network_mode: proxy
+  notes: Substack podcast RSS，AI、技术与研究访谈监控源；backup_url 为备用 RSS
+  priority: core
+  rss_url: https://api.substack.com/feed/podcast/69345.rss
+  source_class: international
+  topics:
+  - AI
+  - tech
+  - research
+- feed_type: rss
+  id: JXJ
+  language: zh
+  name: 甲小姐对话
+  network_mode: direct
+  notes: 小宇宙 xyzfm.space RSS，甲小姐系列访谈，含 AI、科技、科幻方向嘉宾（郝景芳、凯文·凯利等）
+  priority: watchlist
+  rss_url: https://feed.xyzfm.space/nmyf7uktrc6a
+  source_class: domestic
+  topics:
+  - AI
+  - 科技
+  - 科幻

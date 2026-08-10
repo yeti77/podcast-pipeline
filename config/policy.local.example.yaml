@@ -1,0 +1,11 @@
+# Optional local operator overrides. Copy to policy.local.yaml; do not commit it.
+show_notes_translation:
+  enabled: true
+  mode: openclaw
+  target_language: zh
+  cache_enabled: true
+  cache_dir: cache/show_notes_translations
+  model: minimax-portal/MiniMax-M2.7
+  agent_id: main
+  max_chunk_chars: 1800
+  timeout_seconds: 120

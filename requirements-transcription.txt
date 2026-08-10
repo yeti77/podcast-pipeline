@@ -1,0 +1,5 @@
+-r requirements.txt
+
+openai-whisper>=20240930
+torch>=2.2
+mlx-whisper>=0.4; platform_system == "Darwin" and platform_machine == "arm64"

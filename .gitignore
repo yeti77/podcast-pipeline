@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# Runtime artifacts
+*.log
+logs/
+outputs/
+output/
+cache/
+chunks/
+download/
+transcripts/
+whisper_output/
+notes/
+tmp/
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Local secrets (do NOT commit)
+config/feishu_config.json
+config/feishu_folder_mapping.json
+config/policy.local.yaml
+
+# Backups
+*.bak
+*.bak2
+
+# Local runtime state
+state/
+summaries/
+scripts/legacy/
+amp/
+amp

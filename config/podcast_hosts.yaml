@@ -1,0 +1,96 @@
+# podcast_hosts.yaml — Phase 2 主持人排除规则配置
+# 对于指定播客，hosts 列表中的人名默认不作为 confirmed_guest
+# 除非 description/show_notes 中明确写"本期嘉宾：XXX"覆盖此排除规则
+
+# 中文播客 — 主持人通常是主播本人或固定搭档
+"张小珺商业访谈录":
+  hosts:
+    - 张小珺
+  notes: "张小珺是主播，Freda Duan 是嘉宾（系列节目《Freda的投资札记》合作方）"
+
+# a16Z — 主持人是 a16Z 团队成员
+"a16Z":
+  hosts:
+    - Erin Price-Wright
+    - David Ulevitch
+    - Ben Gilbert
+    - Dylan Field
+    - Not Boring
+  notes: "a16Z 节目由合伙人/员工主持，嘉宾是外部创业者/专家"
+
+# 面基
+"面基":
+  hosts:
+    - 某用户
+  notes: "面基播客，恽雷等是嘉宾"
+
+# Making Sense / Sam Harris
+"Making Sense":
+  hosts:
+    - Sam Harris
+  notes: "Sam Harris 是主播，其他人是嘉宾"
+
+# JRE — Joe Rogan 是主持人
+"The Joe Rogan Experience":
+  hosts:
+    - Joe Rogan
+    - Spotify
+  notes: "Joe Rogan 是主持人，其他人都是嘉宾"
+
+# Energy / climate / power overseas feeds
+"Catalyst with Shayle Kann":
+  hosts:
+    - Shayle Kann
+  notes: "Shayle Kann 是主持人，嘉宾通常是能源、气候、电力领域从业者"
+
+"Volts":
+  hosts:
+    - David Roberts
+  notes: "David Roberts 是主持人，其他人通常是嘉宾"
+
+# Investing / business overseas feeds
+"Invest Like the Best":
+  hosts:
+    - Patrick O'Shaughnessy
+  notes: "Patrick O'Shaughnessy 是主持人，其他人通常是嘉宾"
+
+"Odd Lots":
+  hosts:
+    - Bloomberg
+  notes: "Bloomberg 是节目网络/出品方标记，不应作为嘉宾"
+
+"Masters in Business":
+  hosts:
+    - Barry Ritholtz
+    - Bloomberg
+  notes: "Barry Ritholtz 是主持人，Bloomberg 是节目网络/出品方标记"
+
+"Capital Allocators":
+  hosts:
+    - Ted Seides
+  notes: "Ted Seides 是主持人，其他人通常是嘉宾"
+
+"Acquired":
+  hosts:
+    - Ben Gilbert
+    - David Rosenthal
+  notes: "Ben Gilbert 和 David Rosenthal 是主持人"
+
+# Technology / AI overseas feeds
+"Hard Fork":
+  hosts:
+    - New York Times
+  notes: "New York Times 是节目网络/出品方标记，不应作为嘉宾"
+
+"Decoder with Nilay Patel":
+  hosts:
+    - Nilay Patel
+    - The Verge
+  notes: "Nilay Patel 是主持人，The Verge 是节目网络/出品方标记"
+
+"Dwarkesh Podcast":
+  hosts:
+    - Dwarkesh Patel
+  notes: "Dwarkesh Patel 是主持人，其他人通常是嘉宾"
+
+# 其他常见播客可按需添加
