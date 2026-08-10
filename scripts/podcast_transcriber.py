@@ -5,14 +5,14 @@ podcast_transcriber.py — Phase 2：转写层（只负责音频获取 + Whisper
 
 import sys
 import os
-import re
 import json
-import glob
 import hashlib
 import importlib.util
 import platform
 import shutil
 import subprocess
+import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -20,12 +20,6 @@ from pathlib import Path
 from typing import Optional
 from pipeline_paths import get_pipeline_paths
 from policy_config import load_policy_config
-
-sys.path.insert(0, os.path.dirname(__file__))
-try:
-    import audio_resolver
-except ImportError:
-    audio_resolver = None
 
 _RUNTIME_PATHS = get_pipeline_paths()
 PIPELINE_DIR = str(_RUNTIME_PATHS.pipeline_dir)
@@ -399,6 +393,247 @@ def run_selected_backend(
                 ) from openai_exc
         raise TranscriptionCliError(f"mlx backend failed: {mlx_exc}") from mlx_exc
 
+
+def probe_audio_duration(
+    audio_path: Path,
+    *,
+    run_subprocess=subprocess.run,
+    timeout_seconds: int = 30,
+) -> Optional[float]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(audio_path),
+    ]
+    try:
+        completed = run_subprocess(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if getattr(completed, "returncode", 1) != 0:
+            return None
+        duration = float(str(getattr(completed, "stdout", "")).strip())
+        return duration if duration >= 0 else None
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return None
+
+
+def build_reuse_fingerprint(
+    *,
+    source_sha256: str,
+    backend: str,
+    model: str,
+    language: str,
+) -> dict:
+    return {
+        "schema_version": TRANSCRIPTION_METADATA_SCHEMA_VERSION,
+        "source_sha256": str(source_sha256),
+        "backend": str(backend),
+        "model": str(model),
+        "language_requested": str(language),
+    }
+
+
+def _artifact_paths(output_dir: Path) -> dict:
+    root = Path(output_dir).resolve()
+    return {
+        "txt": root / "transcript.txt",
+        "srt": root / "transcript.srt",
+        "vtt": root / "transcript.vtt",
+        "metadata": root / "transcription_meta.json",
+    }
+
+
+def build_transcription_metadata(
+    *,
+    request: TranscriptionRequest,
+    source_sha256: str,
+    backend_result: BackendResult,
+    duration_seconds: Optional[float],
+    elapsed_seconds: float,
+    created_at: datetime,
+) -> dict:
+    paths = _artifact_paths(request.output_dir)
+    return {
+        "status": "success",
+        **build_reuse_fingerprint(
+            source_sha256=source_sha256,
+            backend=backend_result.backend,
+            model=backend_result.model,
+            language=request.language,
+        ),
+        "source_audio": str(request.audio_path.resolve()),
+        "language_detected": backend_result.language,
+        "audio_duration_seconds": duration_seconds,
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "created_at": created_at.isoformat(),
+        "outputs": {
+            "txt": str(paths["txt"]),
+            "srt": str(paths["srt"]),
+            "vtt": str(paths["vtt"]),
+        },
+    }
+
+
+def find_reusable_result(output_dir: Path, fingerprint: dict) -> Optional[dict]:
+    paths = _artifact_paths(output_dir)
+    try:
+        metadata = json.loads(paths["metadata"].read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(metadata, dict) or metadata.get("status") != "success":
+        return None
+    if any(metadata.get(key) != value for key, value in fingerprint.items()):
+        return None
+    for key in ("txt", "srt", "vtt"):
+        try:
+            if paths[key].stat().st_size <= 0:
+                return None
+        except OSError:
+            return None
+    return metadata
+
+
+def publish_artifacts_atomically(
+    output_dir: Path,
+    *,
+    text: str,
+    srt: str,
+    vtt: str,
+    metadata: dict,
+    replace=os.replace,
+) -> None:
+    destination = Path(output_dir).resolve()
+    if destination.exists() and not destination.is_dir():
+        raise OutputWriteError(f"output path is not a directory: {destination}")
+
+    parent = destination.parent
+    stage = None
+    backup = None
+    managed_names = (
+        "transcript.txt",
+        "transcript.srt",
+        "transcript.vtt",
+        "transcription_meta.json",
+    )
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=".transcription-stage-", dir=str(parent)))
+        backup = Path(tempfile.mkdtemp(prefix=".transcription-backup-", dir=str(parent)))
+        staged_values = {
+            "transcript.txt": str(text),
+            "transcript.srt": str(srt),
+            "transcript.vtt": str(vtt),
+            "transcription_meta.json": json.dumps(
+                metadata,
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+        }
+        for name, value in staged_values.items():
+            (stage / name).write_text(value, encoding="utf-8")
+
+        destination.mkdir(parents=False, exist_ok=True)
+        backed_up = []
+        published = []
+        try:
+            for name in managed_names:
+                target = destination / name
+                if target.exists():
+                    replace(target, backup / name)
+                    backed_up.append(name)
+            for name in managed_names:
+                replace(stage / name, destination / name)
+                published.append(name)
+        except Exception:
+            for name in published:
+                target = destination / name
+                if target.exists():
+                    target.unlink()
+            for name in backed_up:
+                saved = backup / name
+                if saved.exists():
+                    os.replace(saved, destination / name)
+            raise
+    except Exception as exc:
+        raise OutputWriteError(f"failed to publish transcription artifacts: {exc}") from exc
+    finally:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+
+
+def transcribe_local_audio(
+    request: TranscriptionRequest,
+    *,
+    capabilities: Optional[dict] = None,
+    backend_runner=run_selected_backend,
+    duration_probe=probe_audio_duration,
+    now=None,
+    monotonic=time.monotonic,
+) -> dict:
+    effective_capabilities = capabilities or probe_transcription_capabilities()
+    selected_backend = select_backend(request.backend, effective_capabilities)
+    validate_transcription_environment(effective_capabilities, selected_backend)
+    selected_model = (
+        request.fallback_model
+        if selected_backend == "openai" and request.backend == "auto"
+        else request.model
+    )
+    source_digest = sha256_file(request.audio_path)
+    fingerprint = build_reuse_fingerprint(
+        source_sha256=source_digest,
+        backend=selected_backend,
+        model=selected_model,
+        language=request.language,
+    )
+    if not request.force:
+        reusable = find_reusable_result(request.output_dir, fingerprint)
+        if reusable is not None:
+            return {
+                "status": "reused",
+                "metadata": reusable,
+                "outputs": dict(reusable.get("outputs") or {}),
+            }
+
+    started = monotonic()
+    backend_result = backend_runner(
+        request,
+        selected_backend,
+        openai_available=bool(effective_capabilities.get("whisper")),
+    )
+    elapsed = max(0.0, monotonic() - started)
+    duration = duration_probe(request.audio_path)
+    created_at = now() if now is not None else datetime.now().astimezone()
+    metadata = build_transcription_metadata(
+        request=request,
+        source_sha256=source_digest,
+        backend_result=backend_result,
+        duration_seconds=duration,
+        elapsed_seconds=elapsed,
+        created_at=created_at,
+    )
+    publish_artifacts_atomically(
+        request.output_dir,
+        text=backend_result.text,
+        srt=segments_to_srt(backend_result.segments),
+        vtt=segments_to_vtt(backend_result.segments),
+        metadata=metadata,
+    )
+    return {
+        "status": "success",
+        "metadata": metadata,
+        "outputs": dict(metadata["outputs"]),
+    }
+
 def load_whisper_config() -> dict:
     """从合并后的 policy 配置读取 Whisper 设置（全局缓存）。"""
     global _WHISPER_CFG
@@ -410,104 +645,3 @@ def load_whisper_config() -> dict:
     except Exception:
         _WHISPER_CFG = {}
     return _WHISPER_CFG
-
-
-def run_whisper(audio_path: str, output_base: str, language: str = "auto") -> dict:
-    """
-    Whisper large-v3-turbo 转写。backend/model 从 policy.yaml 读取。
-    mlx-whisper 失败时自动 fallback 到 openai-whisper CPU。
-    返回 {'txt': path, 'srt': path, 'vtt': path}
-    """
-    import time
-    cfg = load_whisper_config()
-
-    result = {
-        'txt': f"{output_base}.txt",
-        'srt': f"{output_base}.srt",
-        'vtt': f"{output_base}.vtt",
-    }
-
-    if os.path.exists(result['txt']) and os.path.exists(result['srt']):
-        log(f"[Whisper] output exists, skipping: {output_base}")
-        return result
-
-    primary_backend  = cfg.get("whisper_backend", "mlx")
-    primary_model    = cfg.get("whisper_model", "large-v3-turbo")
-    fallback_backend = cfg.get("whisper_fallback_backend", "openai")
-    fallback_model  = cfg.get("whisper_fallback_model", "large-v3-turbo")
-    lang_code = None if language == "auto" else language
-    audio_dur = _audio_duration(audio_path)
-
-    t0 = time.time()
-    actual_backend = primary_backend
-    actual_model   = primary_model
-
-    # ── Backend 1: mlx-whisper ───────────────────────────────────────
-    mlx_exc = None
-    try:
-        import mlx_whisper as mw
-        hf_repo = f"mlx-community/whisper-{primary_model.replace('.', '-')}"
-        log(f"[Whisper] trying mlx-whisper (MPS) | model={hf_repo}...")
-        mlx_result = mw.transcribe(
-            audio=audio_path,
-            path_or_hf_repo=hf_repo,
-            language=lang_code,
-            verbose=False,
-        )
-        transcribe_time = time.time() - t0
-        log(f"[Whisper] mlx done in {transcribe_time:.1f}s "
-            f"({audio_dur/max(transcribe_time,0.1):.1f}x realtime)")
-
-        os.makedirs(os.path.dirname(output_base), exist_ok=True)
-        with open(result['txt'], "w", encoding="utf-8") as f:
-            f.write(mlx_result.get('text', ''))
-        segments = mlx_result.get('segments', [])
-        with open(result['srt'], "w", encoding="utf-8") as f:
-            f.write(_segments_to_srt(segments))
-        with open(result['vtt'], "w", encoding="utf-8") as f:
-            f.write(_segments_to_vtt(segments))
-
-        total_time = time.time() - t0
-        log(f"[Whisper] backend={actual_backend} model={primary_model} "
-            f"device=mps total={total_time:.1f}s fallback=False")
-
-    except Exception as e:
-        mlx_exc = str(e)
-        actual_backend = fallback_backend
-        actual_model   = fallback_model
-        log(f"[Whisper] mlx-whisper failed ({mlx_exc[:80]}), fallback to openai-whisper CPU")
-
-        # ── Backend 2: openai-whisper (CPU) ─────────────────────────
-        try:
-            import torch, whisper
-            t_load = time.time()
-            model = whisper.load_model(fallback_model, device="cpu")
-            load_time = time.time() - t_load
-
-            t_tr = time.time()
-            audio = whisper.load_audio(audio_path)
-            result_api = model.transcribe(audio, language=lang_code)
-            transcribe_time = time.time() - t_tr
-            log(f"[Whisper] openai done in {transcribe_time:.1f}s "
-                f"({audio_dur/max(transcribe_time,0.1):.1f}x realtime)")
-
-            os.makedirs(os.path.dirname(output_base), exist_ok=True)
-            with open(result['txt'], "w", encoding="utf-8") as f:
-                f.write(result_api.get("text", ""))
-            segments = result_api.get('segments', [])
-            with open(result['srt'], "w", encoding="utf-8") as f:
-                f.write(_segments_to_srt(segments))
-            with open(result['vtt'], "w", encoding="utf-8") as f:
-                f.write(_segments_to_vtt(segments))
-
-            total_time = time.time() - t0
-            log(f"[Whisper] backend={actual_backend} model={fallback_model} "
-                f"device=cpu total={total_time:.1f}s load={load_time:.1f}s "
-                f"transcribe={transcribe_time:.1f}s fallback=True "
-                f"fallback_reason={mlx_exc[:60]}")
-
-        except Exception as e2:
-            log(f"[Whisper] fallback openai-whisper also failed: {e2}")
-            return result
-
-    return result

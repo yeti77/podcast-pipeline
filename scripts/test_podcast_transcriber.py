@@ -6,6 +6,10 @@ RSS, call OpenClaw or Feishu, or write production runtime directories.
 """
 
 from pathlib import Path
+from datetime import datetime, timezone
+import json
+import os
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -415,6 +419,294 @@ class TestWhisperBackendsAndFormatting(unittest.TestCase):
             "segments": list(self.SEGMENTS),
             "language": language,
         }
+
+
+class TestTranscriptionArtifacts(unittest.TestCase):
+    def test_duration_probe_uses_ffprobe_argument_list(self):
+        calls = []
+
+        def fake_run(command, capture_output, text, timeout):
+            calls.append(
+                {
+                    "command": command,
+                    "capture_output": capture_output,
+                    "text": text,
+                    "timeout": timeout,
+                }
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="123.456\n", stderr="")
+
+        duration = transcriber.probe_audio_duration(
+            Path("/fixture/episode.mp3"),
+            run_subprocess=fake_run,
+        )
+
+        self.assertEqual(duration, 123.456)
+        self.assertEqual(calls[0]["command"][0], "ffprobe")
+        self.assertEqual(calls[0]["command"][-1], "/fixture/episode.mp3")
+        self.assertTrue(calls[0]["capture_output"])
+        self.assertTrue(calls[0]["text"])
+
+    def test_duration_probe_returns_none_for_failed_or_invalid_probe(self):
+        failures = [
+            subprocess.CompletedProcess([], 1, stdout="", stderr="failed"),
+            subprocess.CompletedProcess([], 0, stdout="not-a-number", stderr=""),
+        ]
+        for completed in failures:
+            with self.subTest(completed=completed):
+                self.assertIsNone(
+                    transcriber.probe_audio_duration(
+                        Path("/fixture/episode.mp3"),
+                        run_subprocess=lambda *args, **kwargs: completed,
+                    )
+                )
+
+    def test_metadata_contains_stable_schema_and_absolute_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = self.request(Path(tmp))
+            result = self.backend_result()
+            created_at = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+
+            metadata = transcriber.build_transcription_metadata(
+                request=request,
+                source_sha256="abc123",
+                backend_result=result,
+                duration_seconds=123.456,
+                elapsed_seconds=4.25,
+                created_at=created_at,
+            )
+
+            self.assertEqual(metadata["schema_version"], 1)
+            self.assertEqual(metadata["status"], "success")
+            self.assertEqual(metadata["source_audio"], str(request.audio_path))
+            self.assertEqual(metadata["source_sha256"], "abc123")
+            self.assertEqual(metadata["backend"], "mlx")
+            self.assertEqual(metadata["model"], "large-v3-turbo")
+            self.assertEqual(metadata["language_requested"], "auto")
+            self.assertEqual(metadata["language_detected"], "en")
+            self.assertEqual(metadata["audio_duration_seconds"], 123.456)
+            self.assertEqual(metadata["elapsed_seconds"], 4.25)
+            self.assertEqual(metadata["created_at"], "2026-08-10T12:00:00+00:00")
+            self.assertEqual(
+                metadata["outputs"]["txt"],
+                str((request.output_dir / "transcript.txt").resolve()),
+            )
+
+    def test_reuse_requires_matching_fingerprint_and_complete_nonempty_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = self.request(Path(tmp))
+            output_dir = request.output_dir
+            output_dir.mkdir()
+            fingerprint = transcriber.build_reuse_fingerprint(
+                source_sha256="abc123",
+                backend="mlx",
+                model="large-v3-turbo",
+                language="auto",
+            )
+            metadata = {"status": "success", **fingerprint}
+            for name in ("transcript.txt", "transcript.srt", "transcript.vtt"):
+                (output_dir / name).write_text(f"content for {name}", encoding="utf-8")
+            (output_dir / "transcription_meta.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+
+            self.assertEqual(
+                transcriber.find_reusable_result(output_dir, fingerprint)["status"],
+                "success",
+            )
+
+            for changed_key, changed_value in (
+                ("source_sha256", "different"),
+                ("backend", "openai"),
+                ("model", "base"),
+                ("language_requested", "en"),
+            ):
+                changed = dict(fingerprint)
+                changed[changed_key] = changed_value
+                with self.subTest(changed_key=changed_key):
+                    self.assertIsNone(
+                        transcriber.find_reusable_result(output_dir, changed)
+                    )
+
+            (output_dir / "transcript.srt").write_text("", encoding="utf-8")
+            self.assertIsNone(transcriber.find_reusable_result(output_dir, fingerprint))
+
+    def test_atomic_publication_preserves_unrelated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "transcript"
+            output_dir.mkdir()
+            (output_dir / "keep.me").write_text("operator file", encoding="utf-8")
+            metadata = {"status": "success", "schema_version": 1}
+
+            transcriber.publish_artifacts_atomically(
+                output_dir,
+                text="Transcript body",
+                srt="SRT body",
+                vtt="VTT body",
+                metadata=metadata,
+            )
+
+            self.assertEqual((output_dir / "transcript.txt").read_text(), "Transcript body")
+            self.assertEqual((output_dir / "transcript.srt").read_text(), "SRT body")
+            self.assertEqual((output_dir / "transcript.vtt").read_text(), "VTT body")
+            self.assertEqual((output_dir / "keep.me").read_text(), "operator file")
+
+    def test_atomic_publication_rolls_back_all_managed_files_on_replace_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "transcript"
+            output_dir.mkdir()
+            managed = (
+                "transcript.txt",
+                "transcript.srt",
+                "transcript.vtt",
+                "transcription_meta.json",
+            )
+            old_values = {}
+            for name in managed:
+                value = f"old-{name}"
+                old_values[name] = value
+                (output_dir / name).write_text(value, encoding="utf-8")
+
+            replace_calls = []
+
+            def failing_replace(source, destination):
+                source_path = Path(source)
+                destination_path = Path(destination)
+                replace_calls.append((source_path, destination_path))
+                if (
+                    source_path.name == "transcript.srt"
+                    and ".transcription-stage-" in source_path.parent.name
+                ):
+                    raise OSError("simulated publish failure")
+                os.replace(source_path, destination_path)
+
+            with self.assertRaisesRegex(transcriber.OutputWriteError, "publish"):
+                transcriber.publish_artifacts_atomically(
+                    output_dir,
+                    text="new text",
+                    srt="new srt",
+                    vtt="new vtt",
+                    metadata={"status": "success"},
+                    replace=failing_replace,
+                )
+
+            self.assertTrue(replace_calls)
+            for name, old_value in old_values.items():
+                self.assertEqual((output_dir / name).read_text(), old_value)
+
+    def test_orchestrator_reuses_matching_result_without_backend_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = self.request(Path(tmp))
+            backend_calls = []
+            capabilities = self.capabilities()
+
+            first = transcriber.transcribe_local_audio(
+                request,
+                capabilities=capabilities,
+                backend_runner=self.recording_backend(backend_calls),
+                duration_probe=lambda path: 10.0,
+                now=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+                monotonic=self.monotonic_values(1.0, 3.0),
+            )
+            second = transcriber.transcribe_local_audio(
+                request,
+                capabilities=capabilities,
+                backend_runner=self.recording_backend(backend_calls),
+                duration_probe=lambda path: 10.0,
+                now=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+                monotonic=self.monotonic_values(5.0, 7.0),
+            )
+
+            self.assertEqual(first["status"], "success")
+            self.assertEqual(second["status"], "reused")
+            self.assertEqual(len(backend_calls), 1)
+
+    def test_force_bypasses_reuse_and_source_change_invalidates_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request = self.request(root)
+            calls = []
+            kwargs = {
+                "capabilities": self.capabilities(),
+                "backend_runner": self.recording_backend(calls),
+                "duration_probe": lambda path: None,
+                "now": lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+            }
+
+            transcriber.transcribe_local_audio(
+                request,
+                monotonic=self.monotonic_values(1.0, 2.0),
+                **kwargs,
+            )
+            forced = transcriber.transcribe_local_audio(
+                transcriber.replace(request, force=True),
+                monotonic=self.monotonic_values(3.0, 4.0),
+                **kwargs,
+            )
+            request.audio_path.write_bytes(b"changed-audio")
+            changed = transcriber.transcribe_local_audio(
+                request,
+                monotonic=self.monotonic_values(5.0, 6.0),
+                **kwargs,
+            )
+
+            self.assertEqual(forced["status"], "success")
+            self.assertEqual(changed["status"], "success")
+            self.assertEqual(len(calls), 3)
+
+    @staticmethod
+    def capabilities():
+        return {
+            "platform_system": "Darwin",
+            "platform_machine": "arm64",
+            "ffmpeg": True,
+            "ffprobe": True,
+            "mlx_whisper": True,
+            "whisper": True,
+        }
+
+    @staticmethod
+    def backend_result():
+        return transcriber.BackendResult(
+            backend="mlx",
+            model="large-v3-turbo",
+            text="Transcript body",
+            segments=[{"start": 0, "end": 1, "text": "Transcript body"}],
+            language="en",
+        )
+
+    def request(self, root):
+        audio = root / "episode.mp3"
+        audio.write_bytes(b"fixture-audio")
+        return transcriber.TranscriptionRequest(
+            audio_path=audio.resolve(),
+            output_dir=(root / "transcript").resolve(),
+            language="auto",
+            backend="auto",
+            model="large-v3-turbo",
+            fallback_model="base",
+            force=False,
+        )
+
+    def recording_backend(self, calls):
+        result = self.backend_result()
+
+        def runner(request, selected_backend, openai_available=False):
+            calls.append(
+                {
+                    "request": request,
+                    "selected_backend": selected_backend,
+                    "openai_available": openai_available,
+                }
+            )
+            return result
+
+        return runner
+
+    @staticmethod
+    def monotonic_values(*values):
+        iterator = iter(values)
+        return lambda: next(iterator)
 
 
 if __name__ == "__main__":
