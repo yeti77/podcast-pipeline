@@ -162,6 +162,18 @@ class TestTranscriptionCapabilities(unittest.TestCase):
                 self.capabilities(mlx_whisper=True, whisper=False),
             )
 
+    def test_explicit_mlx_requires_compatible_apple_silicon(self):
+        with self.assertRaisesRegex(transcriber.EnvironmentCheckError, "Apple Silicon"):
+            transcriber.select_backend(
+                "mlx",
+                self.capabilities(
+                    system="Linux",
+                    machine="x86_64",
+                    mlx_whisper=True,
+                    whisper=True,
+                ),
+            )
+
     def test_environment_validation_requires_ffmpeg_and_ffprobe(self):
         for missing in ("ffmpeg", "ffprobe"):
             capabilities = self.capabilities()

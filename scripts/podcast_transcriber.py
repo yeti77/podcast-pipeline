@@ -164,8 +164,14 @@ def select_backend(requested_backend: str, capabilities: dict) -> str:
     backend = str(requested_backend or "auto").strip().lower()
     if backend not in ALLOWED_TRANSCRIPTION_BACKENDS:
         raise CliInputError(f"unsupported backend: {backend}")
+    apple_silicon = (
+        str(capabilities.get("platform_system", "")).lower() == "darwin"
+        and str(capabilities.get("platform_machine", "")).lower() in {"arm64", "aarch64"}
+    )
 
     if backend == "mlx":
+        if not apple_silicon:
+            raise EnvironmentCheckError("mlx_whisper requires compatible Apple Silicon")
         if not capabilities.get("mlx_whisper"):
             raise EnvironmentCheckError("mlx_whisper is not installed")
         return "mlx"
@@ -174,10 +180,6 @@ def select_backend(requested_backend: str, capabilities: dict) -> str:
             raise EnvironmentCheckError("openai-whisper is not installed")
         return "openai"
 
-    apple_silicon = (
-        str(capabilities.get("platform_system", "")).lower() == "darwin"
-        and str(capabilities.get("platform_machine", "")).lower() in {"arm64", "aarch64"}
-    )
     if apple_silicon and capabilities.get("mlx_whisper"):
         return "mlx"
     if capabilities.get("whisper"):
