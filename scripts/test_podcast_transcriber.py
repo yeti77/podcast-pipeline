@@ -208,5 +208,202 @@ class TestTranscriptionCapabilities(unittest.TestCase):
         }
 
 
+class FakeMlxWhisper:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def transcribe(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class FakeOpenAIModel:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def transcribe(self, audio, language=None):
+        self.calls.append({"audio": audio, "language": language})
+        return self.result
+
+
+class FakeOpenAIWhisper:
+    def __init__(self, result):
+        self.model = FakeOpenAIModel(result)
+        self.load_calls = []
+
+    def load_model(self, model_name, device="cpu"):
+        self.load_calls.append({"model_name": model_name, "device": device})
+        return self.model
+
+
+class TestWhisperBackendsAndFormatting(unittest.TestCase):
+    SEGMENTS = [
+        {"start": 0.0, "end": 1.25, "text": " First line. "},
+        {"start": 61.5, "end": 63.0, "text": "Second line."},
+    ]
+
+    def test_segments_render_as_srt_and_vtt(self):
+        srt = transcriber.segments_to_srt(self.SEGMENTS)
+        vtt = transcriber.segments_to_vtt(self.SEGMENTS)
+
+        self.assertIn("1\n00:00:00,000 --> 00:00:01,250\nFirst line.", srt)
+        self.assertIn("00:01:01,500 --> 00:01:03,000\nSecond line.", srt)
+        self.assertTrue(vtt.startswith("WEBVTT\n\n"))
+        self.assertIn("00:01:01.500 --> 00:01:03.000\nSecond line.", vtt)
+
+    def test_malformed_segments_are_ignored_and_negative_time_is_clamped(self):
+        segments = [
+            {"start": -3, "end": 1, "text": "Valid after clamp"},
+            {"start": "bad", "end": 2, "text": "Bad time"},
+            {"start": 2, "end": 3, "text": ""},
+            "not-a-mapping",
+        ]
+
+        srt = transcriber.segments_to_srt(segments)
+
+        self.assertIn("00:00:00,000 --> 00:00:01,000", srt)
+        self.assertIn("Valid after clamp", srt)
+        self.assertNotIn("Bad time", srt)
+        self.assertNotIn("not-a-mapping", srt)
+
+    def test_mlx_adapter_uses_local_path_model_and_auto_language(self):
+        request = self.request(backend="mlx", language="auto", model="large-v3-turbo")
+        fake = FakeMlxWhisper(self.backend_payload(language="en"))
+
+        result = transcriber.run_mlx_backend(request, mlx_module=fake)
+
+        self.assertEqual(result.backend, "mlx")
+        self.assertEqual(result.model, "large-v3-turbo")
+        self.assertEqual(result.text, "First line. Second line.")
+        self.assertEqual(result.language, "en")
+        self.assertEqual(len(fake.calls), 1)
+        call = fake.calls[0]
+        self.assertEqual(call["audio"], str(request.audio_path))
+        self.assertEqual(
+            call["path_or_hf_repo"],
+            "mlx-community/whisper-large-v3-turbo",
+        )
+        self.assertIsNone(call["language"])
+        self.assertFalse(call["verbose"])
+
+    def test_mlx_adapter_preserves_explicit_hugging_face_repo(self):
+        request = self.request(model="organization/custom-whisper")
+        fake = FakeMlxWhisper(self.backend_payload())
+
+        transcriber.run_mlx_backend(request, mlx_module=fake)
+
+        self.assertEqual(fake.calls[0]["path_or_hf_repo"], "organization/custom-whisper")
+
+    def test_openai_adapter_loads_cpu_model_and_passes_language(self):
+        request = self.request(backend="openai", language="en", model="base")
+        fake = FakeOpenAIWhisper(self.backend_payload(language="en"))
+
+        result = transcriber.run_openai_backend(request, whisper_module=fake)
+
+        self.assertEqual(result.backend, "openai")
+        self.assertEqual(result.model, "base")
+        self.assertEqual(fake.load_calls, [{"model_name": "base", "device": "cpu"}])
+        self.assertEqual(
+            fake.model.calls,
+            [{"audio": str(request.audio_path), "language": "en"}],
+        )
+
+    def test_normalization_reconstructs_text_from_segments_and_rejects_empty_output(self):
+        normalized = transcriber.normalize_backend_result(
+            {"text": "", "segments": self.SEGMENTS, "language": "en"}
+        )
+        self.assertEqual(normalized["text"], "First line. Second line.")
+
+        with self.assertRaisesRegex(transcriber.TranscriptionCliError, "empty transcript"):
+            transcriber.normalize_backend_result({"text": "", "segments": []})
+
+    def test_auto_mlx_failure_falls_back_to_openai_with_fallback_model(self):
+        request = self.request(
+            backend="auto",
+            model="large-v3-turbo",
+            fallback_model="base",
+        )
+        calls = []
+
+        def fail_mlx(actual_request):
+            calls.append(("mlx", actual_request.model))
+            raise RuntimeError("simulated mlx failure")
+
+        def pass_openai(actual_request):
+            calls.append(("openai", actual_request.model))
+            return transcriber.BackendResult(
+                backend="openai",
+                model=actual_request.model,
+                text="Fallback transcript.",
+                segments=[],
+                language="en",
+            )
+
+        result = transcriber.run_selected_backend(
+            request,
+            "mlx",
+            mlx_runner=fail_mlx,
+            openai_runner=pass_openai,
+            openai_available=True,
+        )
+
+        self.assertEqual(result.backend, "openai")
+        self.assertEqual(calls, [("mlx", "large-v3-turbo"), ("openai", "base")])
+
+    def test_explicit_mlx_failure_does_not_fallback(self):
+        request = self.request(backend="mlx", fallback_model="base")
+        openai_called = []
+
+        def fail_mlx(actual_request):
+            del actual_request
+            raise RuntimeError("simulated mlx failure")
+
+        def unexpected_openai(actual_request):
+            openai_called.append(actual_request)
+            raise AssertionError("explicit mlx must not fall back")
+
+        with self.assertRaisesRegex(transcriber.TranscriptionCliError, "mlx backend failed"):
+            transcriber.run_selected_backend(
+                request,
+                "mlx",
+                mlx_runner=fail_mlx,
+                openai_runner=unexpected_openai,
+                openai_available=True,
+            )
+
+        self.assertEqual(openai_called, [])
+
+    def request(
+        self,
+        *,
+        backend="mlx",
+        language="auto",
+        model="large-v3-turbo",
+        fallback_model="large-v3-turbo",
+    ):
+        root = Path(tempfile.gettempdir()).resolve()
+        return transcriber.TranscriptionRequest(
+            audio_path=root / "fixture-audio.mp3",
+            output_dir=root / "fixture-transcript",
+            language=language,
+            backend=backend,
+            model=model,
+            fallback_model=fallback_model,
+            force=False,
+        )
+
+    def backend_payload(self, *, language="en"):
+        return {
+            "text": " First line. Second line. ",
+            "segments": list(self.SEGMENTS),
+            "language": language,
+        }
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

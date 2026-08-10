@@ -13,7 +13,8 @@ import importlib.util
 import platform
 import shutil
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -65,7 +66,17 @@ class TranscriptionRequest:
     language: str
     backend: str
     model: str
+    fallback_model: str = "large-v3-turbo"
     force: bool = False
+
+
+@dataclass(frozen=True)
+class BackendResult:
+    backend: str
+    model: str
+    text: str
+    segments: list
+    language: str
 
 
 def validate_local_audio_path(value: object) -> Path:
@@ -113,7 +124,11 @@ def build_transcription_request(
             f"unsupported backend {selected_backend!r}; expected auto, mlx, or openai"
         )
     selected_language = str(language or "auto").strip() or "auto"
-    selected_model = str(model or policy.get("whisper_model") or "large-v3-turbo").strip()
+    fallback_model = str(
+        policy.get("whisper_fallback_model") or "large-v3-turbo"
+    ).strip()
+    policy_model = fallback_model if selected_backend == "openai" else policy.get("whisper_model")
+    selected_model = str(model or policy_model or "large-v3-turbo").strip()
     if not selected_model:
         raise CliInputError("a Whisper model name is required")
 
@@ -123,6 +138,7 @@ def build_transcription_request(
         language=selected_language,
         backend=selected_backend,
         model=selected_model,
+        fallback_model=fallback_model,
         force=bool(force),
     )
 
@@ -203,6 +219,183 @@ def build_check_result(policy: dict, capabilities: dict) -> dict:
             "openai": str(policy.get("whisper_fallback_model") or "large-v3-turbo"),
         },
     }
+
+
+def format_timestamp(seconds: object, decimal_marker: str = ",") -> str:
+    try:
+        total_milliseconds = max(0, round(float(seconds) * 1000))
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid timestamp: {seconds!r}")
+    hours, remainder = divmod(total_milliseconds, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    whole_seconds, milliseconds = divmod(remainder, 1000)
+    return (
+        f"{hours:02d}:{minutes:02d}:{whole_seconds:02d}"
+        f"{decimal_marker}{milliseconds:03d}"
+    )
+
+
+def _normalized_segments(segments: object) -> list:
+    if not isinstance(segments, list):
+        return []
+    normalized = []
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = max(0.0, float(segment.get("start", 0.0)))
+            end = max(start, float(segment.get("end", start)))
+        except (TypeError, ValueError):
+            continue
+        normalized.append({"start": start, "end": end, "text": text})
+    return normalized
+
+
+def segments_to_srt(segments: object) -> str:
+    blocks = []
+    for index, segment in enumerate(_normalized_segments(segments), start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    str(index),
+                    (
+                        f"{format_timestamp(segment['start'], ',')} --> "
+                        f"{format_timestamp(segment['end'], ',')}"
+                    ),
+                    segment["text"],
+                ]
+            )
+        )
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def segments_to_vtt(segments: object) -> str:
+    blocks = []
+    for segment in _normalized_segments(segments):
+        blocks.append(
+            "\n".join(
+                [
+                    (
+                        f"{format_timestamp(segment['start'], '.')} --> "
+                        f"{format_timestamp(segment['end'], '.')}"
+                    ),
+                    segment["text"],
+                ]
+            )
+        )
+    body = "\n\n".join(blocks)
+    suffix = "\n" if body else ""
+    return f"WEBVTT\n\n{body}{suffix}"
+
+
+def normalize_backend_result(result: object) -> dict:
+    if not isinstance(result, Mapping):
+        raise TranscriptionCliError("Whisper backend returned an invalid result")
+    segments = _normalized_segments(result.get("segments", []))
+    text = str(result.get("text") or "").strip()
+    if not text and segments:
+        text = " ".join(segment["text"] for segment in segments).strip()
+    if not text:
+        raise TranscriptionCliError("Whisper backend returned an empty transcript")
+    return {
+        "text": text,
+        "segments": segments,
+        "language": str(result.get("language") or "").strip(),
+    }
+
+
+def run_mlx_backend(
+    request: TranscriptionRequest,
+    *,
+    mlx_module=None,
+) -> BackendResult:
+    if mlx_module is None:
+        import mlx_whisper as mlx_module
+
+    model_reference = (
+        request.model
+        if "/" in request.model
+        else f"mlx-community/whisper-{request.model.replace('.', '-')}"
+    )
+    raw_result = mlx_module.transcribe(
+        audio=str(request.audio_path),
+        path_or_hf_repo=model_reference,
+        language=None if request.language == "auto" else request.language,
+        verbose=False,
+    )
+    normalized = normalize_backend_result(raw_result)
+    return BackendResult(
+        backend="mlx",
+        model=request.model,
+        text=normalized["text"],
+        segments=normalized["segments"],
+        language=normalized["language"],
+    )
+
+
+def run_openai_backend(
+    request: TranscriptionRequest,
+    *,
+    whisper_module=None,
+) -> BackendResult:
+    if whisper_module is None:
+        import whisper as whisper_module
+
+    model = whisper_module.load_model(request.model, device="cpu")
+    raw_result = model.transcribe(
+        str(request.audio_path),
+        language=None if request.language == "auto" else request.language,
+    )
+    normalized = normalize_backend_result(raw_result)
+    return BackendResult(
+        backend="openai",
+        model=request.model,
+        text=normalized["text"],
+        segments=normalized["segments"],
+        language=normalized["language"],
+    )
+
+
+def run_selected_backend(
+    request: TranscriptionRequest,
+    selected_backend: str,
+    *,
+    mlx_runner=run_mlx_backend,
+    openai_runner=run_openai_backend,
+    openai_available: bool = False,
+) -> BackendResult:
+    if selected_backend == "openai":
+        actual_request = request
+        if request.backend == "auto":
+            actual_request = replace(
+                request,
+                backend="openai",
+                model=request.fallback_model,
+            )
+        try:
+            return openai_runner(actual_request)
+        except Exception as exc:
+            raise TranscriptionCliError(f"openai backend failed: {exc}") from exc
+
+    try:
+        return mlx_runner(request)
+    except Exception as mlx_exc:
+        if request.backend == "auto" and openai_available:
+            fallback_request = replace(
+                request,
+                backend="openai",
+                model=request.fallback_model,
+            )
+            try:
+                return openai_runner(fallback_request)
+            except Exception as openai_exc:
+                raise TranscriptionCliError(
+                    f"mlx backend failed: {mlx_exc}; openai fallback failed: {openai_exc}"
+                ) from openai_exc
+        raise TranscriptionCliError(f"mlx backend failed: {mlx_exc}") from mlx_exc
 
 def load_whisper_config() -> dict:
     """从合并后的 policy 配置读取 Whisper 设置（全局缓存）。"""
