@@ -197,6 +197,32 @@ whisper_output/
 
 结果字段说明见 [数据结构](data_schema.md)。
 
+## 可选：用本地 Whisper 转写已下载音频
+
+用户或自己的 Agent 可以把一个已经下载到本机的音频交给独立转写 CLI。项目不
+负责下载音频，也不会把转写接入 RSS、周报 cron、OpenClaw 或飞书链路。
+
+先安装可选依赖并做无模型调用的环境检查：
+
+```bash
+python3 -m pip install -r requirements-transcription.txt
+python3 scripts/podcast_transcriber.py --check
+```
+
+然后显式指定一个本地文件和输出目录：
+
+```bash
+python3 scripts/podcast_transcriber.py \
+  --audio /path/to/episode.mp3 \
+  --output-dir /path/to/transcripts/episode \
+  --backend auto \
+  --language auto
+```
+
+输出包括 TXT、SRT、VTT 和 JSON metadata。安装 `ffmpeg`、选择 MLX/OpenAI
+Whisper 后端、首次模型下载、Agent 提示词和故障排查见
+[本地 Whisper 转写指南](docs/transcription.md)。
+
 ## Show Notes 翻译
 
 展示层翻译流程为：

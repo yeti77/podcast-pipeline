@@ -2,6 +2,16 @@
 
 This project follows a lightweight Keep a Changelog structure.
 
+## Unreleased
+
+### Added
+
+- Optional local-file Whisper CLI with MLX/OpenAI backend selection, TXT/SRT/VTT
+  artifacts, machine-readable status, safe reuse, and atomic publication.
+- Agent-neutral setup and invocation guide for transcribing audio that the user
+  has already placed on the local machine; automatic audio download is outside
+  the supported boundary.
+
 ## 0.1.0 - 2026-08-10
 
 ### Added

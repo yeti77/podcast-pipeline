@@ -104,6 +104,24 @@ metadata. Delivery scripts validate this metadata before any external call.
 delivery. Both paths are idempotent and require explicit `--force` to repeat a
 successful action.
 
+### Optional local transcription
+
+`podcast_transcriber.py` is a separate, user-invoked branch for one existing
+local audio file:
+
+```text
+user- or agent-supplied local audio
+  -> local path and capability validation
+  -> MLX Whisper or OpenAI Whisper
+  -> transcript.txt + transcript.srt + transcript.vtt + metadata
+```
+
+It does not resolve or download audio, read RSS, call OpenClaw, call Feishu, or
+participate in `podcast_screener_cron.sh`. Backend probing is import-safe;
+artifact publication is atomic; matching complete artifacts can be reused.
+This isolation lets any local agent invoke the same CLI without making that
+agent part of the weekly pipeline.
+
 ### Production coordination
 
 `podcast_screener_cron.sh` is the fail-closed coordinator:

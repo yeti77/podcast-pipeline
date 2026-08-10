@@ -25,6 +25,7 @@ class TestRepositoryHygiene(unittest.TestCase):
             "SECURITY.md",
             "CODE_OF_CONDUCT.md",
             "CHANGELOG.md",
+            "docs/transcription.md",
             "requirements.txt",
             "requirements-transcription.txt",
             ".env.example",
@@ -123,6 +124,22 @@ class TestRepositoryHygiene(unittest.TestCase):
         self.assertIn("scripts/run_safe_regression.py", workflow)
         self.assertNotIn("python3 scripts/podcast_screener.py", workflow)
         self.assertNotIn("openclaw agent", workflow)
+
+    def test_transcription_guide_documents_local_only_optional_contract(self):
+        guide = (ROOT / "docs" / "transcription.md").read_text(encoding="utf-8")
+
+        required_terms = (
+            "python3 scripts/podcast_transcriber.py --check",
+            "--audio",
+            "--output-dir",
+            "requirements-transcription.txt",
+            "ffmpeg",
+            "OpenClaw",
+            "本项目不下载音频",
+        )
+        for term in required_terms:
+            with self.subTest(term=term):
+                self.assertIn(term, guide)
 
 
 if __name__ == "__main__":

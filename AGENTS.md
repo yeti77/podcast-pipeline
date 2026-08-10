@@ -70,6 +70,7 @@ owned by OpenClaw, not this project.
 - `latest_result_store.py`: latest pointers and delivery/notification metadata.
 - `deliver_weekly_report_to_feishu.py`: idempotent Feishu document delivery.
 - `feishu_notify.py`: idempotent group notification.
+- `podcast_transcriber.py`: optional one-file local Whisper transcription.
 - `podcast_screener_cron.sh`: fail-closed production coordination.
 
 Keep external calls at adapter or entrypoint boundaries. Pure renderers and
@@ -96,6 +97,20 @@ openclaw agent --agent <agent_id> --message <prompt> --json --timeout <seconds>
 Do not introduce the obsolete `--model ... eval --prompt ...` form. Do not
 replace unavailable `openclaw web-search` with an agent call implicitly;
 agent calls can consume model quota and require explicit product intent.
+
+## Local Transcription Contract
+
+- The transcription CLI accepts one existing local regular file and rejects
+  HTTP/HTTPS input. It must not resolve or download podcast audio.
+- It is independent of RSS ingestion, weekly selection, OpenClaw, Feishu, and
+  `podcast_screener_cron.sh`.
+- Capability checks must not import/load models, download model files, create
+  runtime directories, or make network calls.
+- Backend adapters stay injectable. Tests use fake Whisper modules, fake
+  subprocesses, and temporary directories; they never process real audio.
+- Keep stdout machine-readable JSON and use stderr for diagnostics.
+- Preserve atomic publication, stable exit codes, and reuse based on source
+  hash plus backend/model/language fingerprint.
 
 ## Scoring And Selection
 
