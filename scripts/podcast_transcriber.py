@@ -193,8 +193,8 @@ def validate_transcription_environment(capabilities: dict, selected_backend: str
 
 
 def build_check_result(policy: dict, capabilities: dict) -> dict:
-    requested_backend = str(policy.get("whisper_backend") or "auto")
-    selected_backend = select_backend(requested_backend, capabilities)
+    configured_backend = str(policy.get("whisper_backend") or "auto")
+    selected_backend = select_backend("auto", capabilities)
     validate_transcription_environment(capabilities, selected_backend)
     return {
         "status": "check_ok",
@@ -210,6 +210,7 @@ def build_check_result(policy: dict, capabilities: dict) -> dict:
             "mlx": bool(capabilities.get("mlx_whisper")),
             "openai": bool(capabilities.get("whisper")),
         },
+        "configured_backend": configured_backend,
         "selected_backend": selected_backend,
         "models": {
             "mlx": str(policy.get("whisper_model") or "large-v3-turbo"),

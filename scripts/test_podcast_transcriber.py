@@ -206,6 +206,24 @@ class TestTranscriptionCapabilities(unittest.TestCase):
             self.assertEqual(result["models"]["openai"], "base")
             self.assertFalse(untouched.exists())
 
+    def test_check_reports_portable_auto_backend_instead_of_policy_preference(self):
+        result = transcriber.build_check_result(
+            {
+                "whisper_backend": "mlx",
+                "whisper_model": "large-v3-turbo",
+                "whisper_fallback_model": "base",
+            },
+            self.capabilities(
+                system="Linux",
+                machine="x86_64",
+                mlx_whisper=False,
+                whisper=True,
+            ),
+        )
+
+        self.assertEqual(result["status"], "check_ok")
+        self.assertEqual(result["selected_backend"], "openai")
+
     @staticmethod
     def capabilities(
         *,
