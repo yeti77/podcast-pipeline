@@ -1,9 +1,8 @@
 # Changelog
 
-This project follows a lightweight Keep a Changelog structure. It has not yet
-published a numbered release.
+This project follows a lightweight Keep a Changelog structure.
 
-## Unreleased
+## 0.1.0 - 2026-08-10
 
 ### Added
 

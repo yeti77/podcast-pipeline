@@ -45,7 +45,7 @@
 ## Quick Start
 
 ```bash
-git clone <your-repository-url> podcast_pipeline
+git clone https://github.com/yeti77/podcast-pipeline.git podcast_pipeline
 cd podcast_pipeline
 
 python3 -m venv .venv
