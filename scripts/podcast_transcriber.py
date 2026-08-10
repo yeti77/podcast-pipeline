@@ -9,6 +9,9 @@ import re
 import json
 import glob
 import hashlib
+import importlib.util
+import platform
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -122,6 +125,84 @@ def build_transcription_request(
         model=selected_model,
         force=bool(force),
     )
+
+
+def probe_transcription_capabilities(
+    *,
+    which=shutil.which,
+    find_spec=importlib.util.find_spec,
+    system=platform.system,
+    machine=platform.machine,
+) -> dict:
+    return {
+        "platform_system": str(system() or ""),
+        "platform_machine": str(machine() or ""),
+        "ffmpeg": bool(which("ffmpeg")),
+        "ffprobe": bool(which("ffprobe")),
+        "mlx_whisper": find_spec("mlx_whisper") is not None,
+        "whisper": find_spec("whisper") is not None,
+    }
+
+
+def select_backend(requested_backend: str, capabilities: dict) -> str:
+    backend = str(requested_backend or "auto").strip().lower()
+    if backend not in ALLOWED_TRANSCRIPTION_BACKENDS:
+        raise CliInputError(f"unsupported backend: {backend}")
+
+    if backend == "mlx":
+        if not capabilities.get("mlx_whisper"):
+            raise EnvironmentCheckError("mlx_whisper is not installed")
+        return "mlx"
+    if backend == "openai":
+        if not capabilities.get("whisper"):
+            raise EnvironmentCheckError("openai-whisper is not installed")
+        return "openai"
+
+    apple_silicon = (
+        str(capabilities.get("platform_system", "")).lower() == "darwin"
+        and str(capabilities.get("platform_machine", "")).lower() in {"arm64", "aarch64"}
+    )
+    if apple_silicon and capabilities.get("mlx_whisper"):
+        return "mlx"
+    if capabilities.get("whisper"):
+        return "openai"
+    raise EnvironmentCheckError("no supported local Whisper backend is installed")
+
+
+def validate_transcription_environment(capabilities: dict, selected_backend: str) -> None:
+    for command in ("ffmpeg", "ffprobe"):
+        if not capabilities.get(command):
+            raise EnvironmentCheckError(f"required media tool is unavailable: {command}")
+    if selected_backend == "mlx" and not capabilities.get("mlx_whisper"):
+        raise EnvironmentCheckError("mlx_whisper is not installed")
+    if selected_backend == "openai" and not capabilities.get("whisper"):
+        raise EnvironmentCheckError("openai-whisper is not installed")
+
+
+def build_check_result(policy: dict, capabilities: dict) -> dict:
+    requested_backend = str(policy.get("whisper_backend") or "auto")
+    selected_backend = select_backend(requested_backend, capabilities)
+    validate_transcription_environment(capabilities, selected_backend)
+    return {
+        "status": "check_ok",
+        "platform": {
+            "system": capabilities.get("platform_system", ""),
+            "machine": capabilities.get("platform_machine", ""),
+        },
+        "media_tools": {
+            "ffmpeg": bool(capabilities.get("ffmpeg")),
+            "ffprobe": bool(capabilities.get("ffprobe")),
+        },
+        "backends": {
+            "mlx": bool(capabilities.get("mlx_whisper")),
+            "openai": bool(capabilities.get("whisper")),
+        },
+        "selected_backend": selected_backend,
+        "models": {
+            "mlx": str(policy.get("whisper_model") or "large-v3-turbo"),
+            "openai": str(policy.get("whisper_fallback_model") or "large-v3-turbo"),
+        },
+    }
 
 def load_whisper_config() -> dict:
     """从合并后的 policy 配置读取 Whisper 设置（全局缓存）。"""

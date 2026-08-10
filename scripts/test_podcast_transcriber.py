@@ -8,6 +8,7 @@ RSS, call OpenClaw or Feishu, or write production runtime directories.
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import podcast_transcriber as transcriber
 
@@ -95,6 +96,116 @@ class TestTranscriptionRequest(unittest.TestCase):
             self.assertEqual(request.backend, "mlx")
             self.assertEqual(request.model, "large-v3-turbo")
             self.assertFalse(output_dir.exists())
+
+
+class TestTranscriptionCapabilities(unittest.TestCase):
+    def test_probe_reports_tools_packages_and_platform_without_importing_backends(self):
+        looked_up_commands = []
+        looked_up_modules = []
+
+        def fake_which(command):
+            looked_up_commands.append(command)
+            return f"/fixture/{command}" if command in {"ffmpeg", "ffprobe"} else None
+
+        def fake_find_spec(module_name):
+            looked_up_modules.append(module_name)
+            return object() if module_name == "mlx_whisper" else None
+
+        with mock.patch("builtins.__import__", wraps=__import__) as import_spy:
+            capabilities = transcriber.probe_transcription_capabilities(
+                which=fake_which,
+                find_spec=fake_find_spec,
+                system=lambda: "Darwin",
+                machine=lambda: "arm64",
+            )
+
+        self.assertEqual(looked_up_commands, ["ffmpeg", "ffprobe"])
+        self.assertEqual(looked_up_modules, ["mlx_whisper", "whisper"])
+        self.assertNotIn("mlx_whisper", [call.args[0] for call in import_spy.mock_calls if call.args])
+        self.assertNotIn("whisper", [call.args[0] for call in import_spy.mock_calls if call.args])
+        self.assertTrue(capabilities["ffmpeg"])
+        self.assertTrue(capabilities["ffprobe"])
+        self.assertTrue(capabilities["mlx_whisper"])
+        self.assertFalse(capabilities["whisper"])
+        self.assertEqual(capabilities["platform_system"], "Darwin")
+        self.assertEqual(capabilities["platform_machine"], "arm64")
+
+    def test_auto_selects_mlx_on_apple_silicon(self):
+        capabilities = self.capabilities(mlx_whisper=True, whisper=True)
+        self.assertEqual(transcriber.select_backend("auto", capabilities), "mlx")
+
+    def test_auto_selects_openai_when_mlx_is_not_compatible_or_available(self):
+        cases = [
+            self.capabilities(system="Linux", machine="x86_64", mlx_whisper=True, whisper=True),
+            self.capabilities(mlx_whisper=False, whisper=True),
+        ]
+        for capabilities in cases:
+            with self.subTest(capabilities=capabilities):
+                self.assertEqual(transcriber.select_backend("auto", capabilities), "openai")
+
+    def test_auto_rejects_environment_without_supported_backend(self):
+        with self.assertRaisesRegex(transcriber.EnvironmentCheckError, "Whisper backend"):
+            transcriber.select_backend(
+                "auto",
+                self.capabilities(mlx_whisper=False, whisper=False),
+            )
+
+    def test_explicit_backend_never_silently_switches(self):
+        with self.assertRaisesRegex(transcriber.EnvironmentCheckError, "mlx_whisper"):
+            transcriber.select_backend(
+                "mlx",
+                self.capabilities(mlx_whisper=False, whisper=True),
+            )
+        with self.assertRaisesRegex(transcriber.EnvironmentCheckError, "openai-whisper"):
+            transcriber.select_backend(
+                "openai",
+                self.capabilities(mlx_whisper=True, whisper=False),
+            )
+
+    def test_environment_validation_requires_ffmpeg_and_ffprobe(self):
+        for missing in ("ffmpeg", "ffprobe"):
+            capabilities = self.capabilities()
+            capabilities[missing] = False
+            with self.subTest(missing=missing):
+                with self.assertRaisesRegex(transcriber.EnvironmentCheckError, missing):
+                    transcriber.validate_transcription_environment(capabilities, "mlx")
+
+    def test_check_result_is_machine_readable_and_does_not_create_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            untouched = Path(tmp) / "must-not-exist"
+            result = transcriber.build_check_result(
+                {
+                    "whisper_backend": "auto",
+                    "whisper_model": "large-v3-turbo",
+                    "whisper_fallback_model": "base",
+                },
+                self.capabilities(),
+            )
+
+            self.assertEqual(result["status"], "check_ok")
+            self.assertEqual(result["selected_backend"], "mlx")
+            self.assertEqual(result["models"]["mlx"], "large-v3-turbo")
+            self.assertEqual(result["models"]["openai"], "base")
+            self.assertFalse(untouched.exists())
+
+    @staticmethod
+    def capabilities(
+        *,
+        system="Darwin",
+        machine="arm64",
+        ffmpeg=True,
+        ffprobe=True,
+        mlx_whisper=True,
+        whisper=True,
+    ):
+        return {
+            "platform_system": system,
+            "platform_machine": machine,
+            "ffmpeg": ffmpeg,
+            "ffprobe": ffprobe,
+            "mlx_whisper": mlx_whisper,
+            "whisper": whisper,
+        }
 
 
 if __name__ == "__main__":
