@@ -882,6 +882,21 @@ class TestTranscriptionCli(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertEqual(self.single_json(stdout)["status"], "input_error")
 
+    def test_unknown_argument_returns_json_input_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = transcriber.main(
+            ["--unknown-option"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        payload = self.single_json(stdout)
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "input_error")
+        self.assertIn("unrecognized arguments", payload["error"])
+
     def test_import_is_side_effect_free_in_fresh_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "must-not-exist"

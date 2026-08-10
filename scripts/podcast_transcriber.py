@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-podcast_transcriber.py — Phase 2：转写层（只负责音频获取 + Whisper，脱水由 OpenClaw 会话生成）
-"""
+"""Transcribe one existing local audio file with a local Whisper backend."""
 
 import argparse
 import sys
@@ -52,6 +50,11 @@ class EnvironmentCheckError(TranscriptionCliError):
 class OutputWriteError(TranscriptionCliError):
     exit_code = 5
     status = "output_error"
+
+
+class TranscriptionArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CliInputError(message)
 
 
 @dataclass(frozen=True)
@@ -650,7 +653,7 @@ def load_whisper_config() -> dict:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = TranscriptionArgumentParser(
         description="Transcribe one existing local audio file with a local Whisper backend."
     )
     parser.add_argument(
