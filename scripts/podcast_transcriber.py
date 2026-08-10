@@ -10,7 +10,9 @@ import json
 import glob
 import hashlib
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from pipeline_paths import get_pipeline_paths
 from policy_config import load_policy_config
@@ -28,6 +30,98 @@ OUTPUT_DIR = str(_RUNTIME_PATHS.outputs_dir)
 
 # ── Whisper 配置（从 policy.yaml 读取）─────────────────────────────────
 _WHISPER_CFG = None
+
+TRANSCRIPTION_METADATA_SCHEMA_VERSION = 1
+ALLOWED_TRANSCRIPTION_BACKENDS = {"auto", "mlx", "openai"}
+
+
+class TranscriptionCliError(RuntimeError):
+    exit_code = 4
+    status = "transcription_error"
+
+
+class CliInputError(TranscriptionCliError):
+    exit_code = 2
+    status = "input_error"
+
+
+class EnvironmentCheckError(TranscriptionCliError):
+    exit_code = 3
+    status = "environment_error"
+
+
+class OutputWriteError(TranscriptionCliError):
+    exit_code = 5
+    status = "output_error"
+
+
+@dataclass(frozen=True)
+class TranscriptionRequest:
+    audio_path: Path
+    output_dir: Path
+    language: str
+    backend: str
+    model: str
+    force: bool = False
+
+
+def validate_local_audio_path(value: object) -> Path:
+    raw_value = str(value or "").strip()
+    if raw_value.lower().startswith(("http://", "https://")):
+        raise CliInputError("--audio must be a local audio file, not a URL")
+    if not raw_value:
+        raise CliInputError("--audio must name an existing local audio file")
+    path = Path(raw_value).expanduser().resolve()
+    if not path.is_file():
+        raise CliInputError(f"local audio file not found or not a regular file: {path}")
+    return path
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        while True:
+            block = source.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def build_transcription_request(
+    *,
+    audio: object,
+    output_dir: object,
+    language: Optional[str],
+    backend: Optional[str],
+    model: Optional[str],
+    force: bool,
+    policy: dict,
+) -> TranscriptionRequest:
+    audio_path = validate_local_audio_path(audio)
+    output_value = str(output_dir or "").strip()
+    if not output_value:
+        raise CliInputError("--output-dir is required for transcription")
+    resolved_output = Path(output_value).expanduser().resolve()
+
+    selected_backend = str(backend or policy.get("whisper_backend") or "auto").strip().lower()
+    if selected_backend not in ALLOWED_TRANSCRIPTION_BACKENDS:
+        raise CliInputError(
+            f"unsupported backend {selected_backend!r}; expected auto, mlx, or openai"
+        )
+    selected_language = str(language or "auto").strip() or "auto"
+    selected_model = str(model or policy.get("whisper_model") or "large-v3-turbo").strip()
+    if not selected_model:
+        raise CliInputError("a Whisper model name is required")
+
+    return TranscriptionRequest(
+        audio_path=audio_path,
+        output_dir=resolved_output,
+        language=selected_language,
+        backend=selected_backend,
+        model=selected_model,
+        force=bool(force),
+    )
 
 def load_whisper_config() -> dict:
     """从合并后的 policy 配置读取 Whisper 设置（全局缓存）。"""
