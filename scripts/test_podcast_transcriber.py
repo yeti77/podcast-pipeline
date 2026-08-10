@@ -7,9 +7,11 @@ RSS, call OpenClaw or Feishu, or write production runtime directories.
 
 from pathlib import Path
 from datetime import datetime, timezone
+import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -707,6 +709,186 @@ class TestTranscriptionArtifacts(unittest.TestCase):
     def monotonic_values(*values):
         iterator = iter(values)
         return lambda: next(iterator)
+
+
+class TestTranscriptionCli(unittest.TestCase):
+    def test_check_mode_emits_one_json_object_and_does_not_transcribe(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        capabilities = TestTranscriptionArtifacts.capabilities()
+
+        with mock.patch.object(
+            transcriber,
+            "load_whisper_config",
+            return_value={
+                "whisper_backend": "auto",
+                "whisper_model": "large-v3-turbo",
+                "whisper_fallback_model": "base",
+            },
+        ), mock.patch.object(
+            transcriber,
+            "probe_transcription_capabilities",
+            return_value=capabilities,
+        ), mock.patch.object(
+            transcriber,
+            "transcribe_local_audio",
+            side_effect=AssertionError("check mode must not transcribe"),
+        ):
+            exit_code = transcriber.main(["--check"], stdout=stdout, stderr=stderr)
+
+        payload = self.single_json(stdout)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "check_ok")
+        self.assertEqual(payload["selected_backend"], "mlx")
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_missing_transcription_arguments_return_json_input_error(self):
+        for argv in ([], ["--audio", "/missing.mp3"]):
+            with self.subTest(argv=argv):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                exit_code = transcriber.main(argv, stdout=stdout, stderr=stderr)
+                payload = self.single_json(stdout)
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(payload["status"], "input_error")
+                self.assertEqual(payload["exit_code"], 2)
+                self.assertTrue(stderr.getvalue().strip())
+
+    def test_success_and_reused_results_are_emitted_unchanged(self):
+        for status in ("success", "reused"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                audio = root / "episode.mp3"
+                audio.write_bytes(b"fixture-audio")
+                expected = {
+                    "status": status,
+                    "outputs": {"txt": str(root / "transcript.txt")},
+                }
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with mock.patch.object(
+                    transcriber,
+                    "load_whisper_config",
+                    return_value={"whisper_backend": "auto"},
+                ), mock.patch.object(
+                    transcriber,
+                    "probe_transcription_capabilities",
+                    return_value=TestTranscriptionArtifacts.capabilities(),
+                ), mock.patch.object(
+                    transcriber,
+                    "transcribe_local_audio",
+                    return_value=expected,
+                ) as transcribe_spy:
+                    exit_code = transcriber.main(
+                        [
+                            "--audio",
+                            str(audio),
+                            "--output-dir",
+                            str(root / "transcript"),
+                        ],
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(self.single_json(stdout), expected)
+                self.assertEqual(transcribe_spy.call_count, 1)
+                self.assertEqual(stderr.getvalue(), "")
+
+    def test_error_classes_map_to_stable_exit_codes_and_json(self):
+        cases = [
+            (transcriber.CliInputError("bad input"), 2, "input_error"),
+            (transcriber.EnvironmentCheckError("missing backend"), 3, "environment_error"),
+            (transcriber.TranscriptionCliError("model failed"), 4, "transcription_error"),
+            (transcriber.OutputWriteError("disk failed"), 5, "output_error"),
+        ]
+        for error, expected_code, expected_status in cases:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                audio = root / "episode.mp3"
+                audio.write_bytes(b"fixture-audio")
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with mock.patch.object(
+                    transcriber,
+                    "load_whisper_config",
+                    return_value={"whisper_backend": "auto"},
+                ), mock.patch.object(
+                    transcriber,
+                    "probe_transcription_capabilities",
+                    return_value=TestTranscriptionArtifacts.capabilities(),
+                ), mock.patch.object(
+                    transcriber,
+                    "transcribe_local_audio",
+                    side_effect=error,
+                ):
+                    exit_code = transcriber.main(
+                        [
+                            "--audio",
+                            str(audio),
+                            "--output-dir",
+                            str(root / "transcript"),
+                        ],
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+
+                payload = self.single_json(stdout)
+                self.assertEqual(exit_code, expected_code)
+                self.assertEqual(payload["status"], expected_status)
+                self.assertEqual(payload["exit_code"], expected_code)
+                self.assertIn(str(error), payload["error"])
+                self.assertIn(str(error), stderr.getvalue())
+
+    def test_invalid_backend_returns_input_error_without_argparse_system_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "episode.mp3"
+            audio.write_bytes(b"fixture-audio")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            exit_code = transcriber.main(
+                [
+                    "--audio",
+                    str(audio),
+                    "--output-dir",
+                    str(root / "transcript"),
+                    "--backend",
+                    "remote",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(self.single_json(stdout)["status"], "input_error")
+
+    def test_import_is_side_effect_free_in_fresh_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "must-not-exist"
+            env = dict(os.environ)
+            env["PODCAST_PIPELINE_HOME"] = str(root)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+            completed = subprocess.run(
+                [sys.executable, "-c", "import podcast_transcriber"],
+                cwd=Path(__file__).resolve().parent,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertFalse(root.exists())
+
+    @staticmethod
+    def single_json(stream):
+        value = stream.getvalue()
+        lines = value.splitlines()
+        if len(lines) != 1:
+            raise AssertionError(f"expected exactly one stdout line, got: {value!r}")
+        return json.loads(lines[0])
 
 
 if __name__ == "__main__":

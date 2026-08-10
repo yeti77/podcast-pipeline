@@ -3,6 +3,7 @@
 podcast_transcriber.py — Phase 2：转写层（只负责音频获取 + Whisper，脱水由 OpenClaw 会话生成）
 """
 
+import argparse
 import sys
 import os
 import json
@@ -645,3 +646,73 @@ def load_whisper_config() -> dict:
     except Exception:
         _WHISPER_CFG = {}
     return _WHISPER_CFG
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Transcribe one existing local audio file with a local Whisper backend."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check local dependencies and backend availability without transcribing.",
+    )
+    parser.add_argument("--audio", help="Path to an existing local audio file.")
+    parser.add_argument("--output-dir", help="Directory for transcript artifacts.")
+    parser.add_argument("--language", help="Language code, or auto when omitted.")
+    parser.add_argument("--backend", help="Whisper backend: auto, mlx, or openai.")
+    parser.add_argument("--model", help="Backend model name.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore a reusable matching result and transcribe again.",
+    )
+    return parser
+
+
+def build_transcription_request_from_args(
+    args: argparse.Namespace,
+    policy: dict,
+) -> TranscriptionRequest:
+    if not str(args.audio or "").strip():
+        raise CliInputError("--audio is required for transcription")
+    if not str(args.output_dir or "").strip():
+        raise CliInputError("--output-dir is required for transcription")
+    return build_transcription_request(
+        audio=args.audio,
+        output_dir=args.output_dir,
+        language=args.language,
+        backend=args.backend,
+        model=args.model,
+        force=args.force,
+        policy=policy,
+    )
+
+
+def main(argv=None, *, stdout=None, stderr=None) -> int:
+    stdout = stdout if stdout is not None else sys.stdout
+    stderr = stderr if stderr is not None else sys.stderr
+    try:
+        args = build_argument_parser().parse_args(argv)
+        policy = load_whisper_config()
+        capabilities = probe_transcription_capabilities()
+        if args.check:
+            result = build_check_result(policy, capabilities)
+        else:
+            request = build_transcription_request_from_args(args, policy)
+            result = transcribe_local_audio(request, capabilities=capabilities)
+        print(json.dumps(result, ensure_ascii=False), file=stdout)
+        return 0
+    except TranscriptionCliError as exc:
+        result = {
+            "status": exc.status,
+            "error": str(exc),
+            "exit_code": exc.exit_code,
+        }
+        print(json.dumps(result, ensure_ascii=False), file=stdout)
+        print(str(exc), file=stderr)
+        return exc.exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
